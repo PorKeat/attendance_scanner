@@ -139,6 +139,7 @@ def find_cell_grid(img):
 def clean_text(text):
     """Clean OCR text output"""
     text = text.replace('\n', ' ')
+    text = text.replace('|', '') # Remove pipe characters
     text = ' '.join(text.split())
     return text.strip()
 
@@ -457,7 +458,7 @@ def index():
                 eng_name = extract_text_from_region(
                     original_straightened_img, x_name1, y1,
                     x_name2 - x_name1, y2 - y1, 'eng',
-                    tesseract_config='--psm 8 --oem 1 -l eng'
+                    tesseract_config='--psm 6 --oem 1 -l eng'
                 )
                 cv2.rectangle(debug_output_img, (x_name1, y1), (x_name2, y2), COLOR_MAGENTA, 1)
                 if eng_name and len(eng_name) > 0:
