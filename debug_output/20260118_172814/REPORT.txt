@@ -1,0 +1,21 @@
+ATTENDANCE SHEET DEBUG REPORT
+==================================================
+
+Image: 20260118_172814_photo_2025-12-31_14-04-47.jpg
+Size: (2560, 1628, 3)
+Grid detected: 29 rows x 10 columns
+
+FILES SAVED:
+- 01_original.jpg: Your uploaded image
+- 02_grid_detected.jpg: Image with detected grid lines
+- header_row0_colX.jpg: Date header cells
+- header_row1_colX_subject.jpg: Subject name cells
+- rowX_col0_no.jpg: Student number cells
+- rowX_col2_name.jpg: Student name cells
+- mark_rowX_colY.jpg: Attendance mark cells
+
+NEXT STEPS:
+1. Check if grid lines are correctly aligned
+2. Look at name cells - is text clear?
+3. Look at subject cells - is text readable?
+4. Look at mark cells - can you see checkmarks/circles clearly?
