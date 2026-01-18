@@ -14,14 +14,16 @@ app = Flask(__name__)
 app.secret_key = 'sv3-attendance-secret-key-2025'
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
+DEBUG_OUTPUT_FOLDER = "debug_output"
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'bmp', 'tiff'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
+app.config['DEBUG_OUTPUT_FOLDER'] = DEBUG_OUTPUT_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 # Create folders
-for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
+for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER, DEBUG_OUTPUT_FOLDER]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
@@ -140,8 +142,8 @@ def clean_text(text):
     text = ' '.join(text.split())
     return text.strip()
 
-def extract_text_from_region(img, x, y, w, h, lang='eng'):
-    """Extract text from a specific region with enhanced preprocessing"""
+def extract_text_from_region(img, x, y, w, h, lang='eng', tesseract_config=None):
+    """Extract text from a specific region with enhanced preprocessing and optional Tesseract config."""
     try:
         region = img[y:y+h, x:x+w]
         
@@ -170,11 +172,15 @@ def extract_text_from_region(img, x, y, w, h, lang='eng'):
                                         cv2.THRESH_BINARY, 11, 2)
         
         # Try OCR on both and pick better result
-        config1 = f'--psm 6 -l {lang} --oem 3'
-        config2 = f'--psm 7 -l {lang} --oem 3'
-        
-        text1 = pytesseract.image_to_string(binary1, config=config1)
-        text2 = pytesseract.image_to_string(binary2, config=config2)
+        if tesseract_config:
+            text1 = pytesseract.image_to_string(binary1, config=tesseract_config)
+            text2 = pytesseract.image_to_string(binary2, config=tesseract_config)
+        else:
+            config1 = f'--psm 6 -l {lang} --oem 3'
+            config2 = f'--psm 7 -l {lang} --oem 3'
+            
+            text1 = pytesseract.image_to_string(binary1, config=config1)
+            text2 = pytesseract.image_to_string(binary2, config=config2)
         
         # Pick the longer, more meaningful result
         text1_clean = clean_text(text1)
@@ -290,6 +296,12 @@ def index():
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(filepath)
             
+            # Extract filename without extension for debug folder
+            filename_without_ext = os.path.splitext(secure_filename(file.filename))[0]
+            unique_debug_folder_name = f"{timestamp}_{filename_without_ext}"
+            debug_output_path_base = os.path.join(app.config['DEBUG_OUTPUT_FOLDER'], unique_debug_folder_name)
+            os.makedirs(debug_output_path_base, exist_ok=True)
+            
             img = cv2.imread(filepath)
             if img is None:
                 flash('Could not read image file.', 'error')
@@ -297,12 +309,39 @@ def index():
             
             print(f"✓ Image loaded: {img.shape}")
             
+            # Save original (pre-straightening)
+            cv2.imwrite(os.path.join(debug_output_path_base, "uploaded_original.jpg"), img)
+
             # Straighten image
-            img = find_and_straighten_sheet(img)
+            original_straightened_img = find_and_straighten_sheet(img.copy()) # Use a copy to preserve original if needed
             
+            # Save the straightened image
+            cv2.imwrite(os.path.join(debug_output_path_base, "original_straightened.jpg"), original_straightened_img)
+
             # Detect table grid
-            h_positions, v_positions = find_cell_grid(img)
+            h_positions, v_positions = find_cell_grid(original_straightened_img)
             
+            
+            # --- Save Grid Visualization ---
+            grid_img_display = original_straightened_img.copy()
+            # Draw horizontal lines
+            for y_pos in h_positions:
+                cv2.line(grid_img_display, (0, y_pos), (grid_img_display.shape[1], y_pos), (0, 255, 0), 2)
+            # Draw vertical lines
+            for x_pos in v_positions:
+                cv2.line(grid_img_display, (x_pos, 0), (x_pos, grid_img_display.shape[0]), (0, 0, 255), 2)
+            cv2.imwrite(os.path.join(debug_output_path_base, "grid.jpg"), grid_img_display)
+
+            # Initialize debug image for drawing all detections
+            debug_output_img = original_straightened_img.copy()
+            # Define colors for drawing
+            COLOR_RED = (0, 0, 255)
+            COLOR_GREEN = (0, 255, 0)
+            COLOR_BLUE = (255, 0, 0)
+            COLOR_YELLOW = (0, 255, 255)
+            COLOR_MAGENTA = (255, 0, 255)
+            COLOR_CYAN = (255, 255, 0)
+
             if len(h_positions) < 3 or len(v_positions) < 5:
                 flash('Could not detect table structure. Please ensure the image is clear.', 'error')
                 return redirect(url_for('index'))
@@ -316,8 +355,15 @@ def index():
                 x2 = v_positions[min(col_idx + 3, len(v_positions) - 1)]
                 y1, y2 = h_positions[0], h_positions[1]
                 
-                date_text = extract_text_from_region(img, x1, y1, x2-x1, y2-y1, 'eng')
+                date_text = extract_text_from_region(original_straightened_img, x1, y1, x2-x1, y2-y1, 'eng', 
+                                                tesseract_config='--psm 8 --oem 1 -l eng -c tessedit_char_whitelist=0123456789/-')
                 
+                # Draw date header bounding box and text
+                cv2.rectangle(debug_output_img, (x1, y1), (x2, y2), COLOR_BLUE, 2)
+                if date_text:
+                    cv2.putText(debug_output_img, f"D: {date_text}", (x1 + 5, y1 + 20), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_BLUE, 1)
+
                 date_match = re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', date_text)
                 if date_match:
                     actual_date = date_match.group(0)
@@ -348,8 +394,15 @@ def index():
                     x1, x2 = v_positions[subj_col], v_positions[subj_col + 1]
                     y1, y2 = h_positions[1], h_positions[2]
                     
-                    subject_text = extract_text_from_region(img, x1, y1, x2-x1, y2-y1, 'eng')
+                    subject_text = extract_text_from_region(original_straightened_img, x1, y1, x2-x1, y2-y1, 'eng',
+                                                            tesseract_config='--psm 8 --oem 1 -l eng')
                     
+                    # Draw subject header bounding box and text
+                    cv2.rectangle(debug_output_img, (x1, y1), (x2, y2), COLOR_GREEN, 2)
+                    if subject_text:
+                        cv2.putText(debug_output_img, f"S: {subject_text}", (x1 + 5, y1 + 20), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_GREEN, 1)
+
                     if subject_text and len(subject_text) > 0:
                         subject_text = subject_text.replace('|', 'I').replace('1', 'I')
                         date_info['subjects'].append(subject_text)
@@ -388,16 +441,28 @@ def index():
                     continue
                 
                 # Extract No (column 0)
+                x_no1, x_no2 = v_positions[0], v_positions[1]
                 no_text = extract_text_from_region(
-                    img, v_positions[0], y1, 
-                    v_positions[1] - v_positions[0], y2 - y1, 'eng'
+                    original_straightened_img, x_no1, y1, 
+                    x_no2 - x_no1, y2 - y1, 'eng',
+                    tesseract_config='--psm 8 --oem 1 -l eng -c tessedit_char_whitelist=0123456789'
                 )
+                cv2.rectangle(debug_output_img, (x_no1, y1), (x_no2, y2), COLOR_YELLOW, 1)
+                if no_text:
+                    cv2.putText(debug_output_img, no_text, (x_no1 + 5, y1 + (y2-y1)//2 + 5), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_YELLOW, 1)
                 
                 # Extract English Name (column 2 - skip Khmer column)
+                x_name1, x_name2 = v_positions[2], v_positions[3]
                 eng_name = extract_text_from_region(
-                    img, v_positions[2], y1,
-                    v_positions[3] - v_positions[2], y2 - y1, 'eng'
+                    original_straightened_img, x_name1, y1,
+                    x_name2 - x_name1, y2 - y1, 'eng',
+                    tesseract_config='--psm 8 --oem 1 -l eng'
                 )
+                cv2.rectangle(debug_output_img, (x_name1, y1), (x_name2, y2), COLOR_MAGENTA, 1)
+                if eng_name and len(eng_name) > 0:
+                    cv2.putText(debug_output_img, eng_name[:20], (x_name1 + 5, y1 + (y2-y1)//2 + 5), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_MAGENTA, 1)
                 
                 if not eng_name or len(eng_name) < 2:
                     continue
@@ -416,14 +481,26 @@ def index():
                         x1, x2 = v_positions[grid_col], v_positions[grid_col + 1]
                         
                         padding = 5
-                        cell_img = img[
-                            max(0, y1+padding):min(img.shape[0], y2-padding),
-                            max(0, x1+padding):min(img.shape[1], x2-padding)
+                        cell_img = original_straightened_img[
+                            max(0, y1+padding):min(original_straightened_img.shape[0], y2-padding),
+                            max(0, x1+padding):min(original_straightened_img.shape[1], x2-padding)
                         ]
                         
                         # Returns 'P', 'A', or ''
                         status = detect_checkmark_or_cross(cell_img)
                         record.append(status)
+
+                        # Draw attendance status on debug image
+                        color = COLOR_CYAN
+                        if status == "P":
+                            color = COLOR_GREEN
+                        elif status == "A":
+                            color = COLOR_RED
+                        
+                        cv2.rectangle(debug_output_img, (x1, y1), (x2, y2), color, 1)
+                        if status:
+                            cv2.putText(debug_output_img, status, (x1 + (x2-x1)//2 - 5, y1 + (y2-y1)//2 + 5),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                 
                 records.append(record)
                 print(f"✓ Processed: {no_text} - {eng_name[:30]}")
@@ -432,6 +509,9 @@ def index():
                 flash('Could not extract student data. Please check image quality.', 'error')
                 return redirect(url_for('index'))
             
+            # Save the final debug output image
+            cv2.imwrite(os.path.join(debug_output_path_base, "debug_output.jpg"), debug_output_img)
+
             # Create simple DataFrame first
             df = pd.DataFrame(records, columns=columns_level2)
             
