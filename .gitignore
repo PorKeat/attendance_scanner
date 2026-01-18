@@ -2,3 +2,4 @@ uploads/
 outputs/
 model.h5
 venv/
+debug_output/
